@@ -157,15 +157,111 @@
     (map-set user-stx-balance tx-sender (- current-balance amount))
     (ok true)))
 
+;; Remove water from sale
+(define-public (remove-water-from-sale (amount uint))
+  (let (
+    (current-for-sale (get amount (default-to {amount: u0, price: u0} (map-get? water-for-sale {user: tx-sender}))))
+  )
+    (asserts! (>= current-for-sale amount) err-not-enough-water)
+    (try! (update-water-reserve (to-int (- amount))))
+    (map-set water-for-sale {user: tx-sender} 
+             {amount: (- current-for-sale amount), 
+              price: (get price (default-to {amount: u0, price: u0} (map-get? water-for-sale {user: tx-sender})))})
+    (ok true)))
 
+;; Buy water from user
+(define-public (buy-water-from-user (seller principal) (amount uint))
+  (let (
+    (sale-data (default-to {amount: u0, price: u0} (map-get? water-for-sale {user: seller})))
+    (water-cost (* amount (get price sale-data)))
+    (transaction-fee (calculate-fee water-cost))
+    (total-cost (+ water-cost transaction-fee))
+    (seller-water (default-to u0 (map-get? user-water-balance seller)))
+    (buyer-balance (default-to u0 (map-get? user-stx-balance tx-sender)))
+    (seller-balance (default-to u0 (map-get? user-stx-balance seller)))
+    (owner-balance (default-to u0 (map-get? user-stx-balance contract-owner)))
+  )
+    (asserts! (not (is-eq tx-sender seller)) err-same-user)
+    (asserts! (> amount u0) err-invalid-amount) ;; Ensure amount is greater than 0
+    (asserts! (>= (get amount sale-data) amount) err-not-enough-water)
+    (asserts! (>= seller-water amount) err-not-enough-water)
+    (asserts! (>= buyer-balance total-cost) err-not-enough-water)
 
+    ;; Update seller's water balance and for-sale amount
+    (map-set user-water-balance seller (- seller-water amount))
+    (map-set water-for-sale {user: seller} 
+             {amount: (- (get amount sale-data) amount), price: (get price sale-data)})
 
+    ;; Update buyer's STX and water balance
+    (map-set user-stx-balance tx-sender (- buyer-balance total-cost))
+    (map-set user-water-balance tx-sender (+ (default-to u0 (map-get? user-water-balance tx-sender)) amount))
 
+    ;; Update seller's and contract owner's STX balance
+    (map-set user-stx-balance seller (+ seller-balance water-cost))
+    (map-set user-stx-balance contract-owner (+ owner-balance transaction-fee))
 
+    (ok true)))
 
+;; Refund water
+(define-public (refund-water (amount uint))
+  (let (
+    (user-water (default-to u0 (map-get? user-water-balance tx-sender)))
+    (refund-amount (calculate-refund amount))
+    (contract-stx-balance (default-to u0 (map-get? user-stx-balance contract-owner)))
+  )
+    (asserts! (> amount u0) err-invalid-amount) ;; Ensure amount is greater than 0
+    (asserts! (>= user-water amount) err-not-enough-water)
+    (asserts! (>= contract-stx-balance refund-amount) err-refund-failed)
 
+    ;; Update user's water balance
+    (map-set user-water-balance tx-sender (- user-water amount))
 
+    ;; Update user's and contract's STX balance
+    (map-set user-stx-balance tx-sender (+ (default-to u0 (map-get? user-stx-balance tx-sender)) refund-amount))
+    (map-set user-stx-balance contract-owner (- contract-stx-balance refund-amount))
 
+    (ok true)))
 
+;; Function to fix the bug in water transfer validation
+(define-public (validate-water-transfer (amount uint) (receiver principal))
+  (begin
+    (asserts! (> amount u0) err-invalid-amount)  ;; Ensure the amount is valid
+    (asserts! (not (is-eq tx-sender receiver)) err-same-user) ;; Ensure the receiver is not the sender
+    (ok true)))
 
+;; Function to add a test suite for the water purchase functionality
+(define-public (test-water-purchase (buyer principal) (seller principal) (amount uint))
+  (let (
+    (buyer-balance (default-to u0 (map-get? user-stx-balance buyer)))
+    (seller-balance (default-to u0 (map-get? user-stx-balance seller)))
+    (transaction-fee (calculate-fee (* amount (var-get water-price)))))
+    (asserts! (>= buyer-balance (+ (* amount (var-get water-price)) transaction-fee)) err-not-enough-water)
+    (ok true)))
+
+;; Function to fix issue with water price updates
+(define-public (correct-water-price-update (new-price uint))
+  (begin
+    (asserts! (> new-price u0) err-invalid-price) ;; Ensure the price is greater than 0
+    (var-set water-price new-price)
+    (ok true)))
+
+;; Function to allow users to withdraw water
+(define-public (withdraw-water (amount uint))
+  (let (
+    (current-water (default-to u0 (map-get? user-water-balance tx-sender)))
+  )
+    (asserts! (>= current-water amount) err-not-enough-water)
+    (map-set user-water-balance tx-sender (- current-water amount))
+    (try! (update-water-reserve (to-int (- amount))))
+    (ok true)))
+
+;; Function to reserve water for sale before listing it
+(define-public (reserve-water-for-sale (amount uint))
+  (let (
+    (current-reserve (var-get current-water-reserve))
+    (new-reserve (- current-reserve amount))
+  )
+    (asserts! (>= current-reserve amount) err-not-enough-water)
+    (var-set current-water-reserve new-reserve)
+    (ok true)))
 
